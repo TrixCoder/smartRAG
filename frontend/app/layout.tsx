@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Unified RAG Manager",
-  description: "Advanced RAG System with Gemini 1.5",
+  description: "Intelligent RAG System with automatic strategy selection",
 };
 
 export default function RootLayout({

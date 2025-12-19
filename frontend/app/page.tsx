@@ -14,7 +14,7 @@ export default function Home() {
           <div className="text-center mb-6">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 text-xs font-medium mb-4">
               <span className="w-1.5 h-1.5 bg-teal-500 rounded-full animate-pulse" />
-              Powered by Gemini 1.5
+              AI-Powered RAG
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 mb-2">
               SmartRAG

@@ -3,10 +3,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const API_KEY = process.env.GEMINI_API_KEY;
+const API_KEY = process.env.LLM_API_KEY || process.env.GEMINI_API_KEY;
 
 if (!API_KEY) {
-    console.warn("WARNING: GEMINI_API_KEY is not set in environment variables.");
+    console.warn("WARNING: LLM_API_KEY is not set in environment variables.");
 }
 
 const genAI = new GoogleGenerativeAI(API_KEY || "");
