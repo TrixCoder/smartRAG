@@ -2,12 +2,19 @@ import { ApolloServer } from "@apollo/server";
 import { expressMiddleware } from "@apollo/server/express4";
 import express, { Request, Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import multer from "multer";
 import { typeDefs } from "./graphql/schema";
 import { resolvers } from "./graphql/resolvers";
 import { connectDB, FileMetadata, GraphCache } from "./db";
-import { GeminiService } from "./services/gemini";
 import { Neo4jService } from "./services/neo4j";
+import {
+    validateRequestBody,
+    validateGraphQLQuery,
+    validateFileUpload,
+    sanitizeUserQuery
+} from "./middleware/security";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -54,12 +61,45 @@ async function startServer() {
 
     const app = express();
 
+    // Security: HTTP headers
+    app.use(helmet({
+        contentSecurityPolicy: {
+            directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'", "'unsafe-inline'"],
+                styleSrc: ["'self'", "'unsafe-inline'"],
+                imgSrc: ["'self'", "data:", "blob:"],
+            },
+        },
+        crossOriginEmbedderPolicy: false,
+    }));
+
+    // Security: Rate limiting
+    const limiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100, // 100 requests per window
+        message: { error: "Too many requests, please try again later" },
+        standardHeaders: true,
+        legacyHeaders: false,
+    });
+    app.use(limiter);
+
+    // Stricter rate limit for uploads
+    const uploadLimiter = rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 10, // 10 uploads per minute
+        message: { error: "Too many uploads, please try again later" },
+    });
+
     app.use(cors({
         origin: ["http://localhost:3000", "http://localhost:5173"],
         credentials: true
     }));
 
-    app.use(express.json());
+    app.use(express.json({ limit: "1mb" }));
+
+    // Security: Validate all request bodies
+    app.use(validateRequestBody);
 
     const server = new ApolloServer({
         typeDefs,
@@ -68,8 +108,8 @@ async function startServer() {
 
     await server.start();
 
-    // GraphQL endpoint
-    app.use("/graphql", expressMiddleware(server) as any);
+    // GraphQL endpoint with query validation
+    app.use("/graphql", validateGraphQLQuery, expressMiddleware(server) as any);
 
     // File upload endpoint - stores in MongoDB, not filesystem
     app.post("/upload", upload.array("files", 10), async (req: Request, res: Response): Promise<any> => {
