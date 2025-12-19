@@ -3,35 +3,18 @@ import { expressMiddleware } from "@apollo/server/express4";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 import { typeDefs } from "./graphql/schema";
 import { resolvers } from "./graphql/resolvers";
 import { connectDB, FileMetadata, GraphCache } from "./db";
 import { GeminiService } from "./services/gemini";
+import { Neo4jService } from "./services/neo4j";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => {
-        cb(null, uploadsDir);
-    },
-    filename: (_req, file, cb) => {
-        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        cb(null, uniqueSuffix + "-" + file.originalname);
-    },
-});
-
+// Configure multer for memory storage (no filesystem)
 const upload = multer({
-    storage,
+    storage: multer.memoryStorage(),
     limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
     fileFilter: (_req, file, cb) => {
         const allowedTypes = [
@@ -51,27 +34,29 @@ const upload = multer({
     },
 });
 
-function getFileType(mimetype: string): string {
-    if (mimetype === "application/pdf") return "pdf";
-    if (mimetype === "text/csv") return "csv";
-    if (mimetype === "application/json") return "json";
-    if (mimetype === "text/plain") return "text";
-    if (mimetype.startsWith("image/")) return "image";
-    if (mimetype.startsWith("audio/")) return "audio";
-    if (mimetype.startsWith("video/")) return "video";
-    return "other";
+function getFileType(mimeType: string): string {
+    const typeMap: Record<string, string> = {
+        "application/pdf": "pdf",
+        "text/csv": "csv",
+        "application/json": "json",
+        "text/plain": "text",
+        "image/png": "image",
+        "image/jpeg": "image",
+        "image/webp": "image",
+    };
+    return typeMap[mimeType] || "other";
 }
 
 async function startServer() {
-    // Connect to MongoDB first
+    // Connect to databases
     await connectDB();
+    await Neo4jService.connect();
 
     const app = express();
 
-    // CORS configuration
     app.use(cors({
         origin: ["http://localhost:3000", "http://localhost:5173"],
-        credentials: true,
+        credentials: true
     }));
 
     app.use(express.json());
@@ -83,10 +68,10 @@ async function startServer() {
 
     await server.start();
 
-    // GraphQL endpoint - cast to any to bypass type mismatch
+    // GraphQL endpoint
     app.use("/graphql", expressMiddleware(server) as any);
 
-    // File upload endpoint
+    // File upload endpoint - stores in MongoDB, not filesystem
     app.post("/upload", upload.array("files", 10), async (req: Request, res: Response): Promise<any> => {
         try {
             const files = req.files as Express.Multer.File[];
@@ -97,72 +82,115 @@ async function startServer() {
             const uploadedFiles = [];
 
             for (const file of files) {
-                // Determine if file has relational data (simple heuristic based on type)
                 const hasRelationalData = file.mimetype === "text/csv" || file.mimetype === "application/json";
                 const fileType = getFileType(file.mimetype);
+                const content = file.buffer.toString("utf-8");
 
                 let extractedEntities: string[] = [];
+                let dataSchema: any = null;
+                let sampleData = "";
                 let contentSummary = "";
 
-                // Handle CSV files with proper parsing
+                // Handle CSV files
                 if (fileType === "csv") {
                     try {
-                        const { analyzeCSV, extractEntitiesFromCSV, generateCSVSummary } = await import("./utils/csvParser");
-                        const analysis = analyzeCSV(file.path, 20);
-                        extractedEntities = extractEntitiesFromCSV(analysis, file.originalname);
-                        contentSummary = generateCSVSummary(analysis, file.originalname);
-                        console.log(`CSV Analysis: ${analysis.rowCount} rows, ${analysis.columns.length} columns`);
-                        console.log(`Extracted entities: ${extractedEntities.length}`);
+                        const { parse } = await import("csv-parse/sync");
+                        const records = parse(content, {
+                            columns: true,
+                            skip_empty_lines: true,
+                            relax_column_count: true,
+                        });
+
+                        if (records.length > 0) {
+                            const columns = Object.keys(records[0]);
+                            const sampleRows = records.slice(0, 10);
+
+                            // Build schema stats
+                            const stats: Record<string, any> = {};
+                            columns.forEach(col => {
+                                const values = records.map((r: any) => r[col]).filter((v: any) => v);
+                                const uniqueValues = [...new Set(values)];
+                                const numericValues = values.filter((v: any) => !isNaN(parseFloat(v)));
+
+                                if (numericValues.length > values.length * 0.8) {
+                                    const nums = numericValues.map((v: any) => parseFloat(v));
+                                    stats[col] = { type: "numeric", min: Math.min(...nums), max: Math.max(...nums), uniqueCount: uniqueValues.length };
+                                } else {
+                                    stats[col] = { type: "categorical", uniqueCount: uniqueValues.length };
+                                }
+                            });
+
+                            dataSchema = { columns, rowCount: records.length, stats };
+                            sampleData = JSON.stringify(sampleRows);
+
+                            // Extract entities
+                            extractedEntities = [...columns.map(c => `Column: ${c}`)];
+
+                            // Get unique categorical values
+                            const categoricalCols = ["category", "brand", "type", "status", "segment"];
+                            columns.forEach(col => {
+                                if (categoricalCols.some(c => col.toLowerCase().includes(c))) {
+                                    const uniqueVals = [...new Set(records.map((r: any) => r[col]))].filter(v => v).slice(0, 10);
+                                    extractedEntities.push(...(uniqueVals as string[]));
+                                }
+                            });
+
+                            contentSummary = `CSV: ${records.length} rows, Columns: ${columns.join(", ")}`;
+                            console.log(`CSV: ${records.length} rows, ${columns.length} columns`);
+                        }
                     } catch (e) {
                         console.warn("CSV parsing failed:", e);
                     }
                 } else if (fileType === "json") {
-                    // Handle JSON files
                     try {
-                        const content = fs.readFileSync(file.path, "utf-8");
                         const jsonData = JSON.parse(content);
                         const keys = Array.isArray(jsonData) && jsonData.length > 0
                             ? Object.keys(jsonData[0])
                             : Object.keys(jsonData);
                         extractedEntities = keys.map(k => `Field: ${k}`);
+                        sampleData = JSON.stringify(Array.isArray(jsonData) ? jsonData.slice(0, 10) : jsonData).substring(0, 5000);
+                        contentSummary = `JSON: ${keys.length} fields`;
                     } catch (e) {
                         console.warn("JSON parsing failed:", e);
                     }
-                } else if (["pdf", "text"].includes(fileType)) {
-                    // For text files, use Gemini for entity extraction
-                    try {
-                        const content = fs.readFileSync(file.path, "utf-8");
-                        if (content.length > 0 && content.length < 50000) {
-                            const entityResult = await GeminiService.analyzeComplex(
-                                `Extract key entities from: ${content.substring(0, 5000)}`,
-                                "Return a JSON array of entity names only"
-                            );
-                            if (Array.isArray(entityResult)) {
-                                extractedEntities = entityResult;
-                            }
-                        }
-                    } catch (e) {
-                        console.warn("Entity extraction failed:", e);
-                    }
+                } else if (fileType === "text") {
+                    contentSummary = content.substring(0, 1000);
+                    sampleData = content.substring(0, 5000);
                 }
 
                 // Save to MongoDB
                 const fileDoc = await FileMetadata.create({
-                    filename: file.filename,
                     originalName: file.originalname,
                     mimeType: file.mimetype,
                     size: file.size,
                     fileType,
                     hasRelationalData,
-                    extractedEntities,
+                    extractedEntities: [...new Set(extractedEntities)].slice(0, 50),
+                    dataSchema,
+                    sampleData,
+                    contentSummary,
                 });
+
+                // Save entities to Neo4j if connected
+                if (Neo4jService.isConnected() && extractedEntities.length > 0) {
+                    try {
+                        const entities = extractedEntities.slice(0, 30).map(e => ({
+                            name: e,
+                            type: e.startsWith("Column:") ? "Column" : e.startsWith("Field:") ? "Field" : "Value"
+                        }));
+                        const created = await Neo4jService.createEntities(entities);
+                        console.log(`Created ${created} entities in Neo4j`);
+                    } catch (e) {
+                        console.warn("Neo4j entity creation failed:", e);
+                    }
+                }
 
                 uploadedFiles.push({
                     id: fileDoc._id,
                     filename: file.originalname,
                     type: fileType,
                     hasRelationalData,
-                    extractedEntities,
+                    extractedEntities: fileDoc.extractedEntities,
                 });
             }
 
@@ -191,20 +219,11 @@ async function startServer() {
     app.delete("/files/:id", async (req: Request, res: Response): Promise<any> => {
         try {
             const { id } = req.params;
-            const file = await FileMetadata.findById(id);
+            const file = await FileMetadata.findByIdAndDelete(id);
 
             if (!file) {
                 return res.status(404).json({ error: "File not found" });
             }
-
-            // Delete from filesystem
-            const filePath = path.join(uploadsDir, file.filename);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-
-            // Delete from MongoDB
-            await FileMetadata.findByIdAndDelete(id);
 
             res.json({ success: true, message: "File deleted" });
         } catch (error) {
@@ -213,18 +232,17 @@ async function startServer() {
         }
     });
 
-    // Get file visualization data with relations
+    // Get visualization data - combines MongoDB and Neo4j data
     app.get("/visualization", async (_req: Request, res: Response) => {
         try {
             const files = await FileMetadata.find().sort({ createdAt: -1 });
             const graphCache = await GraphCache.findOne().sort({ createdAt: -1 });
 
-            // Build nodes and links for visualization
             const nodes: any[] = [];
             const links: any[] = [];
             const nodeIds = new Set<string>();
 
-            // Add file nodes
+            // Add file nodes from MongoDB
             files.forEach((file) => {
                 const fileId = `file-${file._id}`;
                 if (!nodeIds.has(fileId)) {
@@ -237,7 +255,7 @@ async function startServer() {
                     });
                     nodeIds.add(fileId);
 
-                    // Add entity nodes from file metadata
+                    // Add entity nodes
                     file.extractedEntities?.forEach((entity) => {
                         const entityId = `entity-${entity.toLowerCase().replace(/\s+/g, "-")}`;
 
@@ -245,7 +263,7 @@ async function startServer() {
                             nodes.push({
                                 id: entityId,
                                 name: entity,
-                                type: "entity",
+                                type: entity.startsWith("Column:") ? "column" : "entity",
                                 val: 6,
                             });
                             nodeIds.add(entityId);
@@ -260,29 +278,28 @@ async function startServer() {
                 }
             });
 
-            // Add relations from GraphCache
+            // Add Neo4j graph data if connected
+            if (Neo4jService.isConnected()) {
+                try {
+                    const neo4jGraph = await Neo4jService.getGraph();
+                    neo4jGraph.nodes.forEach(n => {
+                        if (!nodeIds.has(n.id)) {
+                            nodes.push({ ...n, val: 8 });
+                            nodeIds.add(n.id);
+                        }
+                    });
+                    links.push(...neo4jGraph.links);
+                } catch (e) {
+                    console.warn("Neo4j graph fetch failed:", e);
+                }
+            }
+
+            // Add cached relationships
             if (graphCache) {
-                // Add cached entities
-                graphCache.entities?.forEach((entity) => {
-                    const entityId = `entity-${entity.name.toLowerCase().replace(/\s+/g, "-")}`;
-
-                    if (!nodeIds.has(entityId)) {
-                        nodes.push({
-                            id: entityId,
-                            name: entity.name,
-                            type: entity.type || "entity",
-                            val: 6,
-                        });
-                        nodeIds.add(entityId);
-                    }
-                });
-
-                // Add cached relationships
                 graphCache.relationships?.forEach((rel) => {
                     const fromId = `entity-${rel.from.toLowerCase().replace(/\s+/g, "-")}`;
                     const toId = `entity-${rel.to.toLowerCase().replace(/\s+/g, "-")}`;
 
-                    // Ensure both nodes exist
                     if (!nodeIds.has(fromId)) {
                         nodes.push({ id: fromId, name: rel.from, type: "entity", val: 6 });
                         nodeIds.add(fromId);
@@ -311,6 +328,12 @@ async function startServer() {
     app.listen(PORT, () => {
         console.log(`🚀 Server ready at: http://localhost:${PORT}/graphql`);
         console.log(`📁 File upload at: http://localhost:${PORT}/upload`);
+    });
+
+    // Cleanup on exit
+    process.on("SIGINT", async () => {
+        await Neo4jService.close();
+        process.exit(0);
     });
 }
 

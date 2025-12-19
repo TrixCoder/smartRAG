@@ -49,16 +49,26 @@ const ChatMessageSchema = new Schema<IChatMessage>({
 
 export const ChatMessage = mongoose.model<IChatMessage>("ChatMessage", ChatMessageSchema);
 
-// File Metadata Schema
+// File Metadata Schema - stores file content directly in MongoDB
 export interface IFileMetadata extends Document {
     sessionId?: mongoose.Types.ObjectId;
-    filename: string;
     originalName: string;
     mimeType: string;
     size: number;
     fileType: "pdf" | "csv" | "json" | "text" | "image" | "audio" | "video" | "other";
     hasRelationalData: boolean;
     extractedEntities?: string[];
+    // Schema info for structured data (CSV/JSON)
+    dataSchema?: {
+        columns: string[];
+        rowCount: number;
+        stats: Record<string, { type: string; uniqueCount?: number; min?: number; max?: number }>;
+    };
+    // Sample data (first few rows for CSV, subset for JSON)
+    sampleData?: string;
+    // Content summary for AI context
+    contentSummary?: string;
+    // Vector and graph references
     vectorIds?: string[];
     graphNodeIds?: string[];
     createdAt: Date;
@@ -66,7 +76,6 @@ export interface IFileMetadata extends Document {
 
 const FileMetadataSchema = new Schema<IFileMetadata>({
     sessionId: { type: Schema.Types.ObjectId, ref: "ChatSession", index: true },
-    filename: { type: String, required: true },
     originalName: { type: String, required: true },
     mimeType: { type: String, required: true },
     size: { type: Number, required: true },
@@ -77,6 +86,13 @@ const FileMetadataSchema = new Schema<IFileMetadata>({
     },
     hasRelationalData: { type: Boolean, default: false },
     extractedEntities: [String],
+    dataSchema: {
+        columns: [String],
+        rowCount: Number,
+        stats: Schema.Types.Mixed
+    },
+    sampleData: String,
+    contentSummary: String,
     vectorIds: [String],
     graphNodeIds: [String]
 }, { timestamps: true });
