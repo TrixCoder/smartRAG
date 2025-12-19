@@ -7,7 +7,7 @@ import path from "path";
 import fs from "fs";
 import { typeDefs } from "./graphql/schema";
 import { resolvers } from "./graphql/resolvers";
-import { connectDB, FileMetadata } from "./db";
+import { connectDB, FileMetadata, GraphCache } from "./db";
 import { GeminiService } from "./services/gemini";
 import dotenv from "dotenv";
 
@@ -101,26 +101,45 @@ async function startServer() {
                 const hasRelationalData = file.mimetype === "text/csv" || file.mimetype === "application/json";
                 const fileType = getFileType(file.mimetype);
 
-                // Read file content for text-based files
-                let content = "";
-                if (["pdf", "csv", "json", "text"].includes(fileType)) {
-                    try {
-                        content = fs.readFileSync(file.path, "utf-8");
-                    } catch (e) {
-                        console.warn("Could not read file content:", e);
-                    }
-                }
-
-                // Extract entities using Gemini (for text content)
                 let extractedEntities: string[] = [];
-                if (content && content.length > 0 && content.length < 50000) {
+                let contentSummary = "";
+
+                // Handle CSV files with proper parsing
+                if (fileType === "csv") {
                     try {
-                        const entityResult = await GeminiService.analyzeComplex(
-                            `Extract key entities (companies, people, products, locations) from this text. Return as JSON array of strings.\n\nText: ${content.substring(0, 5000)}`,
-                            "You are an entity extraction expert. Return ONLY a JSON array of entity names."
-                        );
-                        if (Array.isArray(entityResult)) {
-                            extractedEntities = entityResult;
+                        const { analyzeCSV, extractEntitiesFromCSV, generateCSVSummary } = await import("./utils/csvParser");
+                        const analysis = analyzeCSV(file.path, 20);
+                        extractedEntities = extractEntitiesFromCSV(analysis, file.originalname);
+                        contentSummary = generateCSVSummary(analysis, file.originalname);
+                        console.log(`CSV Analysis: ${analysis.rowCount} rows, ${analysis.columns.length} columns`);
+                        console.log(`Extracted entities: ${extractedEntities.length}`);
+                    } catch (e) {
+                        console.warn("CSV parsing failed:", e);
+                    }
+                } else if (fileType === "json") {
+                    // Handle JSON files
+                    try {
+                        const content = fs.readFileSync(file.path, "utf-8");
+                        const jsonData = JSON.parse(content);
+                        const keys = Array.isArray(jsonData) && jsonData.length > 0
+                            ? Object.keys(jsonData[0])
+                            : Object.keys(jsonData);
+                        extractedEntities = keys.map(k => `Field: ${k}`);
+                    } catch (e) {
+                        console.warn("JSON parsing failed:", e);
+                    }
+                } else if (["pdf", "text"].includes(fileType)) {
+                    // For text files, use Gemini for entity extraction
+                    try {
+                        const content = fs.readFileSync(file.path, "utf-8");
+                        if (content.length > 0 && content.length < 50000) {
+                            const entityResult = await GeminiService.analyzeComplex(
+                                `Extract key entities from: ${content.substring(0, 5000)}`,
+                                "Return a JSON array of entity names only"
+                            );
+                            if (Array.isArray(entityResult)) {
+                                extractedEntities = entityResult;
+                            }
                         }
                     } catch (e) {
                         console.warn("Entity extraction failed:", e);
@@ -173,7 +192,7 @@ async function startServer() {
         try {
             const { id } = req.params;
             const file = await FileMetadata.findById(id);
-            
+
             if (!file) {
                 return res.status(404).json({ error: "File not found" });
             }
@@ -194,49 +213,96 @@ async function startServer() {
         }
     });
 
-    // Get file visualization data
+    // Get file visualization data with relations
     app.get("/visualization", async (_req: Request, res: Response) => {
         try {
             const files = await FileMetadata.find().sort({ createdAt: -1 });
+            const graphCache = await GraphCache.findOne().sort({ createdAt: -1 });
 
             // Build nodes and links for visualization
             const nodes: any[] = [];
             const links: any[] = [];
+            const nodeIds = new Set<string>();
 
+            // Add file nodes
             files.forEach((file) => {
-                // Add file node
-                nodes.push({
-                    id: `file-${file._id}`,
-                    name: file.originalName,
-                    type: "file",
-                    fileType: file.fileType,
-                    val: 10,
-                });
+                const fileId = `file-${file._id}`;
+                if (!nodeIds.has(fileId)) {
+                    nodes.push({
+                        id: fileId,
+                        name: file.originalName,
+                        type: "file",
+                        fileType: file.fileType,
+                        val: 12,
+                    });
+                    nodeIds.add(fileId);
 
-                // Add entity nodes and links
-                file.extractedEntities?.forEach((entity) => {
-                    const entityId = `entity-${entity.toLowerCase().replace(/\s+/g, "-")}`;
+                    // Add entity nodes from file metadata
+                    file.extractedEntities?.forEach((entity) => {
+                        const entityId = `entity-${entity.toLowerCase().replace(/\s+/g, "-")}`;
 
-                    // Check if entity node already exists
-                    if (!nodes.find(n => n.id === entityId)) {
+                        if (!nodeIds.has(entityId)) {
+                            nodes.push({
+                                id: entityId,
+                                name: entity,
+                                type: "entity",
+                                val: 6,
+                            });
+                            nodeIds.add(entityId);
+                        }
+
+                        links.push({
+                            source: fileId,
+                            target: entityId,
+                            label: "contains",
+                        });
+                    });
+                }
+            });
+
+            // Add relations from GraphCache
+            if (graphCache) {
+                // Add cached entities
+                graphCache.entities?.forEach((entity) => {
+                    const entityId = `entity-${entity.name.toLowerCase().replace(/\s+/g, "-")}`;
+
+                    if (!nodeIds.has(entityId)) {
                         nodes.push({
                             id: entityId,
-                            name: entity,
-                            type: "entity",
-                            val: 5,
+                            name: entity.name,
+                            type: entity.type || "entity",
+                            val: 6,
                         });
+                        nodeIds.add(entityId);
+                    }
+                });
+
+                // Add cached relationships
+                graphCache.relationships?.forEach((rel) => {
+                    const fromId = `entity-${rel.from.toLowerCase().replace(/\s+/g, "-")}`;
+                    const toId = `entity-${rel.to.toLowerCase().replace(/\s+/g, "-")}`;
+
+                    // Ensure both nodes exist
+                    if (!nodeIds.has(fromId)) {
+                        nodes.push({ id: fromId, name: rel.from, type: "entity", val: 6 });
+                        nodeIds.add(fromId);
+                    }
+                    if (!nodeIds.has(toId)) {
+                        nodes.push({ id: toId, name: rel.to, type: "entity", val: 6 });
+                        nodeIds.add(toId);
                     }
 
-                    // Link file to entity
                     links.push({
-                        source: `file-${file._id}`,
-                        target: entityId,
+                        source: fromId,
+                        target: toId,
+                        label: rel.type,
                     });
                 });
-            });
+            }
 
             res.json({ nodes, links });
         } catch (error) {
+            console.error("Visualization error:", error);
             res.status(500).json({ error: "Failed to generate visualization" });
         }
     });

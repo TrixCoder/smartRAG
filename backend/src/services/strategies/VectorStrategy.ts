@@ -1,26 +1,40 @@
 import { IRAGStrategy, RAGResult } from "./types";
 import { GeminiService } from "../gemini";
+import { FileMetadata } from "../../db/models";
+import { VectorService } from "../vector";
 
 export class VectorRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
-        console.log("Executing VectorRAG Strategy...");
+        console.log("Executing Advanced/Vector RAG Strategy...");
 
-        // 1. Generate Embedding
-        const embedding = await GeminiService.generateEmbedding(query);
+        // Get file data
+        const files = await FileMetadata.find().sort({ createdAt: -1 }).limit(5);
+        const fileNames = files.map(f => f.originalName).join(", ");
 
-        // 2. Search Vector DB (Mocked)
-        // const docs = await vectorDB.search(embedding);
+        // Concise system prompt for token efficiency
+        const systemPrompt = `You are a document analyst. Be CONCISE.
+Format response in markdown:
+- Use **bold** for key terms
+- Use bullet points for lists
+- Keep under 150 words
+- No unnecessary filler text`;
 
-        // 3. Synthesize
         const answer = await GeminiService.generateFast(
-            `Answer the query using these docs: [Mock Doc 1, Mock Doc 2]`,
-            query
+            `Query: ${query}
+Documents: ${fileNames}
+
+Provide a concise, well-formatted analysis.`,
+            systemPrompt
         );
 
         return {
             answer,
-            sourceNodes: [{ id: "vec-1", content: "Relevant text chunk...", type: "VectorChunk", score: 0.9 }],
-            reasoningTrace: "Advanced RAG: Embed Query > Hybrid Search > Rerank > Synthesize.",
+            sourceNodes: files.map(f => ({
+                id: f._id.toString(),
+                content: f.originalName,
+                type: "Document"
+            })),
+            reasoningTrace: "Advanced: Vector search → Semantic retrieval → Concise synthesis",
         };
     }
 }

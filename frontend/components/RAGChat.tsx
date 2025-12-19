@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import KnowledgeGraphModal from "./KnowledgeGraphModal";
+import MarkdownMessage from "./MarkdownMessage";
 
 interface ChatMessage {
     role: "user" | "assistant";
@@ -32,6 +33,7 @@ interface ChatMessage {
     strategy?: string;
     trace?: string[];
     executionPlan?: string[];
+    isNew?: boolean;
 }
 
 interface UploadedFile {
@@ -91,7 +93,8 @@ export default function RAGChat() {
                     content: result.answer,
                     strategy: result.strategyUsed,
                     trace: result.reasoningTrace ? result.reasoningTrace.split("\n") : [],
-                    executionPlan: result.executionPlan
+                    executionPlan: result.executionPlan,
+                    isNew: true
                 };
 
                 setMessages((prev) => [...prev, assistantMsg]);
@@ -267,9 +270,16 @@ export default function RAGChat() {
                                 "px-4 py-2.5 rounded-2xl text-sm leading-relaxed",
                                 msg.role === "user"
                                     ? "bg-teal-600 text-white rounded-br-md"
-                                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 rounded-bl-md"
+                                    : "bg-zinc-100 dark:bg-zinc-800 rounded-bl-md max-w-full"
                             )}>
-                                {msg.content}
+                                {msg.role === "user" ? (
+                                    msg.content
+                                ) : (
+                                    <MarkdownMessage
+                                        content={msg.content}
+                                        isNew={msg.isNew}
+                                    />
+                                )}
                             </div>
 
                             {msg.role === "assistant" && msg.strategy && (

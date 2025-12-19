@@ -11,8 +11,7 @@ if (!API_KEY) {
 
 const genAI = new GoogleGenerativeAI(API_KEY || "");
 
-// Configuration to reduce safety blocks for legitimate data analysis, 
-// ensuring we don't get false positives on company financial data.
+// Configuration to reduce safety blocks for legitimate data analysis
 const safetySettings = [
     {
         category: HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -32,16 +31,18 @@ const safetySettings = [
     },
 ];
 
-// Model Definitions
-// Pro: For Reasoning, Routing, and Complex Graph Analysis
-const modelPro = genAI.getGenerativeModel({
-    model: "gemini-1.5-pro",
+// Model Definitions - Using stable models from official docs
+// https://ai.google.dev/gemini-api/docs/models
+
+// Primary model for reasoning and routing
+const modelPrimary = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",  // Stable version
     safetySettings
 });
 
-// Flash: For Summarization, Simple RAG, High Volume tasks (using 2.0 for speed)
-const modelFlash = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash-exp",
+// Fast model for summarization and quick tasks
+const modelFast = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",  // Same model, very fast
     safetySettings
 });
 
@@ -70,14 +71,12 @@ export const GeminiService = {
 
     /**
      * Complex Reasoning with JSON output. 
-     * Uses Gemini 1.5 Pro.
-     * Enforces JSON structure via system instruction passed as first message.
+     * Uses Gemini 2.0 Flash with structured output.
      */
     async analyzeComplex(prompt: string, systemInstruction: string): Promise<any> {
         try {
-            // Create a model instance with specific system instruction for this request
             const modelWithSystem = genAI.getGenerativeModel({
-                model: "gemini-1.5-pro",
+                model: "gemini-2.5-flash",
                 safetySettings,
                 systemInstruction: systemInstruction,
                 generationConfig: {
@@ -90,7 +89,7 @@ export const GeminiService = {
             const responseText = result.response.text();
             return JSON.parse(responseText);
         } catch (error) {
-            console.error("Gemini Pro Error:", error);
+            console.error("Gemini analyzeComplex Error:", error);
             throw error;
         }
     },
@@ -101,19 +100,18 @@ export const GeminiService = {
      */
     async generateFast(prompt: string, context: string = ""): Promise<string> {
         try {
-            const result = await modelFlash.generateContent(
+            const result = await modelFast.generateContent(
                 `Context: ${context}\n\nTask: ${prompt}`
             );
             return result.response.text();
         } catch (error) {
-            console.error("Gemini Flash Error:", error);
+            console.error("Gemini generateFast Error:", error);
             throw error;
         }
     },
 
     /**
      * The "Judge" - decides strictly which RAG path to take.
-     * This is a critical function for the Unified RAG System.
      */
     async routeQuery(query: string, fileMetadata: any): Promise<{ strategy: string; reasoning: string; plan: string[] }> {
         const systemPrompt = `You are the RAG Router, an expert AI system architecture judge.
@@ -147,9 +145,8 @@ Given the Graph Schema: ${schema}
 Generate a READ-ONLY Cypher query to answer: "${query}"
 Return ONLY the Cypher string, no markdown.`;
 
-        // Create model with system instruction for Cypher generation
         const modelWithSystem = genAI.getGenerativeModel({
-            model: "gemini-1.5-pro",
+            model: "gemini-2.5-flash",
             safetySettings,
             systemInstruction: systemPrompt,
             generationConfig: { temperature: 0 }
