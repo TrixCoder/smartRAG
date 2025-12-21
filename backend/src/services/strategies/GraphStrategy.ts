@@ -6,57 +6,82 @@ export class GraphRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
         console.log("Executing GraphRAG Strategy...");
 
-        // Get file data for analysis
-        const files = await FileMetadata.find().sort({ createdAt: -1 }).limit(5);
-        const fileContents = files.map(f => ({
+        // Get sessionId from context if available
+        const sessionId = context?.sessionId;
+
+        // Get file data for this session
+        const fileQuery = sessionId ? { sessionId } : {};
+        const files = await FileMetadata.find(fileQuery).sort({ createdAt: -1 }).limit(10);
+
+        if (files.length === 0) {
+            return {
+                answer: "No data uploaded yet. Please upload files to analyze relations.",
+                sourceNodes: [],
+                reasoningTrace: "GraphRAG: No files found in session",
+            };
+        }
+
+        // Build data summary
+        const dataInfo = files.map(f => ({
             name: f.originalName,
             type: f.fileType,
-            entities: f.extractedEntities || []
+            columns: f.extractedEntities?.filter(e => e.startsWith("Column:")).map(e => e.replace("Column:", "").trim()) || [],
+            values: f.extractedEntities?.filter(e => !e.startsWith("Column:") && !e.startsWith("Field:")).slice(0, 20) || [],
+            summary: f.contentSummary || "",
+            sample: f.sampleData ? JSON.parse(f.sampleData).slice(0, 3) : []
         }));
 
-        // Extract relations using Gemini
-        const systemPrompt = `You are a data analyst. Analyze the query and available data.
-Return a CONCISE markdown response with:
-1. **Key Entities** (bullet list)
-2. **Relations** (table: Entity A | Relation | Entity B)
-3. **Insights** (2-3 bullet points max)
+        // CONCISE system prompt - enforces direct answers
+        const systemPrompt = `You are a DATA ANALYST. Be DIRECT and CONCISE.
 
-Keep response under 200 words. Use markdown formatting.`;
+RULES:
+- Answer in 3-5 sentences MAX
+- DO NOT explain methods or theory
+- DO NOT give generic advice
+- ONLY describe what's in the ACTUAL DATA provided
+- If asked about relations, list them as: "A → relates to → B"
+
+Available data: ${JSON.stringify(dataInfo, null, 2)}`;
 
         const answer = await GeminiService.generateFast(
-            `Query: ${query}
-Available Data: ${JSON.stringify(fileContents)}
-
-Analyze and respond concisely in markdown.`,
+            query,
             systemPrompt
         );
 
-        // Extract relations for graph visualization
+        // Extract and store relations
         try {
             const relationData = await GeminiService.analyzeComplex(
-                `Extract entities and relationships from this context: ${JSON.stringify(fileContents)}
-Return JSON: { "entities": [{"name": "...", "type": "..."}], "relationships": [{"from": "...", "to": "...", "type": "..."}] }`,
-                "You are a knowledge graph extractor. Return only valid JSON."
+                `From this data, extract entity relationships:
+${JSON.stringify(dataInfo)}
+
+Return JSON only:
+{"entities": [{"name": "...", "type": "column|value|category"}], "relationships": [{"from": "...", "to": "...", "type": "has_value|belongs_to|relates_to"}]}`,
+                "You are a knowledge graph extractor. Return ONLY valid JSON, nothing else."
             );
 
-            // Save to graph cache if valid
             if (relationData && (relationData.entities || relationData.relationships)) {
-                const existingCache = await GraphCache.findOne().sort({ createdAt: -1 });
-                if (existingCache) {
-                    existingCache.entities = [...(existingCache.entities || []), ...(relationData.entities || [])];
-                    existingCache.relationships = [...(existingCache.relationships || []), ...(relationData.relationships || [])];
-                    await existingCache.save();
-                } else {
-                    await GraphCache.create({
-                        sessionId: files[0]?._id || null,
-                        entities: relationData.entities || [],
-                        relationships: relationData.relationships || []
-                    });
+                // Store per session
+                if (sessionId) {
+                    const existingCache = await GraphCache.findOne({ sessionId });
+                    if (existingCache) {
+                        // Merge without duplicates
+                        const existingEntityNames = new Set(existingCache.entities?.map(e => e.name) || []);
+                        const newEntities = (relationData.entities || []).filter((e: any) => !existingEntityNames.has(e.name));
+                        existingCache.entities = [...(existingCache.entities || []), ...newEntities];
+                        existingCache.relationships = [...(existingCache.relationships || []), ...(relationData.relationships || [])];
+                        await existingCache.save();
+                    } else {
+                        await GraphCache.create({
+                            sessionId,
+                            entities: relationData.entities || [],
+                            relationships: relationData.relationships || []
+                        });
+                    }
+                    console.log("Stored graph cache for session:", sessionId);
                 }
-                console.log("Updated graph cache with new relations");
             }
         } catch (e) {
-            console.warn("Failed to extract relations for graph:", e);
+            console.warn("Failed to extract relations:", e);
         }
 
         return {
@@ -66,7 +91,7 @@ Return JSON: { "entities": [{"name": "...", "type": "..."}], "relationships": [{
                 content: f.originalName,
                 type: "File"
             })),
-            reasoningTrace: "GraphRAG: Analyzed data → Extracted relations → Synthesized response",
+            reasoningTrace: `GraphRAG: Analyzed ${files.length} file(s) → Found relations → Generated response`,
         };
     }
 }

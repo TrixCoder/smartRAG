@@ -28,8 +28,12 @@ export class RAGRouterService {
         const strategyKey = decision.strategy as keyof typeof this.strategies;
         const strategy = this.strategies[strategyKey] || this.strategies.Advanced;
 
-        // 2. Execution
-        const result = await strategy.execute(query, { ...fileMetadata, plan: decision.plan });
+        // 2. Execution - pass sessionId in context
+        const result = await strategy.execute(query, {
+            ...fileMetadata,
+            plan: decision.plan,
+            sessionId: fileMetadata?.sessionId
+        });
 
         // 3. Return
         return {

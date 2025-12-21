@@ -1,35 +1,46 @@
 import { IRAGStrategy, RAGResult } from "./types";
 import { GeminiService } from "../gemini";
+import { FileMetadata } from "../../db/models";
 
 export class AgenticRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
         console.log("Executing Agentic RAG Strategy...");
+
+        const sessionId = context?.sessionId;
         const plan = context.plan || ["Analyze", "Execute", "Synthesize"];
 
-        // Concise multi-step execution
-        const systemPrompt = `You are an AI agent executing a multi-step plan.
-Execution Plan: ${plan.join(" → ")}
+        const fileQuery = sessionId ? { sessionId } : {};
+        const files = await FileMetadata.find(fileQuery).sort({ createdAt: -1 }).limit(10);
 
-Format response:
-## Steps Completed
-- Step 1: [brief result]
-- Step 2: [brief result]
+        const dataContext = files.map(f => ({
+            name: f.originalName,
+            summary: f.contentSummary || "",
+            entities: f.extractedEntities?.slice(0, 10) || []
+        }));
 
-## Final Answer
-[Concise answer in 2-3 sentences]
+        const systemPrompt = `You are an AI executing a task step-by-step.
 
-Keep total response under 200 words.`;
+RULES:
+- Be CONCISE (max 5 sentences total)
+- Show results, not methods
+- Base answers on provided data ONLY
+
+Plan: ${plan.join(" → ")}
+Data: ${JSON.stringify(dataContext)}`;
 
         const answer = await GeminiService.generateFast(
-            `Task: ${query}
-Execute the plan and provide results.`,
+            `Task: ${query}\nExecute and provide BRIEF results only.`,
             systemPrompt
         );
 
         return {
             answer,
-            sourceNodes: [],
-            reasoningTrace: `Agentic: ${plan.join(" → ")} → Complete`,
+            sourceNodes: files.map(f => ({
+                id: f._id.toString(),
+                content: f.originalName,
+                type: "File"
+            })),
+            reasoningTrace: `Agentic: ${plan.join(" → ")} → Done`,
             executionPlan: plan,
         };
     }

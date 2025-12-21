@@ -170,6 +170,7 @@ export const resolvers = {
                 // Get session's file metadata
                 const files = await FileMetadata.find({ sessionId: sessionObjectId });
                 const fileMetadata = {
+                    sessionId: sessionId, // Pass sessionId to strategies
                     hasRelationalData: files.some(f => f.hasRelationalData) || complexity === "high",
                     fileTypes: files.map(f => f.fileType),
                     files: files.map(f => ({

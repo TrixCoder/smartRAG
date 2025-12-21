@@ -1,31 +1,43 @@
 import { IRAGStrategy, RAGResult } from "./types";
 import { GeminiService } from "../gemini";
 import { FileMetadata } from "../../db/models";
-import { VectorService } from "../vector";
 
 export class VectorRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
         console.log("Executing Advanced/Vector RAG Strategy...");
 
-        // Get file data
-        const files = await FileMetadata.find().sort({ createdAt: -1 }).limit(5);
-        const fileNames = files.map(f => f.originalName).join(", ");
+        const sessionId = context?.sessionId;
+        const fileQuery = sessionId ? { sessionId } : {};
+        const files = await FileMetadata.find(fileQuery).sort({ createdAt: -1 }).limit(10);
 
-        // Concise system prompt for token efficiency
-        const systemPrompt = `You are a document analyst. Be CONCISE.
-Format response in markdown:
-- Use **bold** for key terms
+        if (files.length === 0) {
+            return {
+                answer: "No documents uploaded. Please upload files to analyze.",
+                sourceNodes: [],
+                reasoningTrace: "VectorRAG: No files in session",
+            };
+        }
+
+        // Build context from file data
+        const dataContext = files.map(f => ({
+            name: f.originalName,
+            summary: f.contentSummary || "",
+            sample: f.sampleData ? JSON.parse(f.sampleData).slice(0, 5) : []
+        }));
+
+        const systemPrompt = `You are a DATA ANALYST. Be DIRECT and CONCISE.
+
+RULES:
+- Answer in 3-5 sentences MAX
 - Use bullet points for lists
-- Keep under 150 words
-- No unnecessary filler text`;
+- Base answers ONLY on the provided data
+- DO NOT give generic explanations or methods
+- If no relevant data exists, say so briefly
 
-        const answer = await GeminiService.generateFast(
-            `Query: ${query}
-Documents: ${fileNames}
+Data available:
+${JSON.stringify(dataContext, null, 2)}`;
 
-Provide a concise, well-formatted analysis.`,
-            systemPrompt
-        );
+        const answer = await GeminiService.generateFast(query, systemPrompt);
 
         return {
             answer,
@@ -34,7 +46,7 @@ Provide a concise, well-formatted analysis.`,
                 content: f.originalName,
                 type: "Document"
             })),
-            reasoningTrace: "Advanced: Vector search → Semantic retrieval → Concise synthesis",
+            reasoningTrace: `VectorRAG: Retrieved ${files.length} file(s) → Synthesized concise response`,
         };
     }
 }
