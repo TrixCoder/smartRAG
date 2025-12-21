@@ -4,7 +4,7 @@ import { FileMetadata } from "../../db/models";
 
 export class VectorRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
-        console.log("Executing Advanced/Vector RAG Strategy...");
+        console.log("Executing VectorRAG Strategy...");
 
         const sessionId = context?.sessionId;
         const fileQuery = sessionId ? { sessionId } : {};
@@ -12,32 +12,35 @@ export class VectorRAGStrategy implements IRAGStrategy {
 
         if (files.length === 0) {
             return {
-                answer: "No documents uploaded. Please upload files to analyze.",
+                answer: "No documents uploaded. Please upload files first.",
                 sourceNodes: [],
-                reasoningTrace: "VectorRAG: No files in session",
+                reasoningTrace: "VectorRAG: No files",
             };
         }
 
-        // Build context from file data
-        const dataContext = files.map(f => ({
-            name: f.originalName,
-            summary: f.contentSummary || "",
-            sample: f.sampleData ? JSON.parse(f.sampleData).slice(0, 5) : []
-        }));
+        // Get actual data
+        const dataContext = files.map(f => {
+            let sample: any[] = [];
+            try { sample = f.sampleData ? JSON.parse(f.sampleData).slice(0, 5) : []; } catch { }
+            return { name: f.originalName, summary: f.contentSummary || "", sample };
+        });
 
-        const systemPrompt = `You are a DATA ANALYST. Be DIRECT and CONCISE.
+        // STRICT brief prompt
+        const systemPrompt = `You analyze uploaded data. Be EXTREMELY BRIEF.
+
+DATA:
+${JSON.stringify(dataContext[0], null, 2)}
 
 RULES:
-- Answer in 3-5 sentences MAX
-- Use bullet points for lists
-- Base answers ONLY on the provided data
-- DO NOT give generic explanations or methods
-- If no relevant data exists, say so briefly
+1. MAX 4 sentences total
+2. Answer based ONLY on the data shown above
+3. NO tutorials, NO definitions, NO generic explanations
+4. If data doesn't answer the question, say "Not found in your data"`;
 
-Data available:
-${JSON.stringify(dataContext, null, 2)}`;
-
-        const answer = await GeminiService.generateFast(query, systemPrompt);
+        const answer = await GeminiService.generateFast(
+            query,
+            systemPrompt
+        );
 
         return {
             answer,
@@ -46,7 +49,7 @@ ${JSON.stringify(dataContext, null, 2)}`;
                 content: f.originalName,
                 type: "Document"
             })),
-            reasoningTrace: `VectorRAG: Retrieved ${files.length} file(s) → Synthesized concise response`,
+            reasoningTrace: `VectorRAG: Analyzed ${files.length} file(s)`,
         };
     }
 }

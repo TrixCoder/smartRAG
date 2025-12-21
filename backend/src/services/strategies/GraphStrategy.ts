@@ -1,15 +1,13 @@
 import { IRAGStrategy, RAGResult } from "./types";
 import { GeminiService } from "../gemini";
 import { FileMetadata, GraphCache } from "../../db/models";
+import mongoose from "mongoose";
 
 export class GraphRAGStrategy implements IRAGStrategy {
     async execute(query: string, context: any): Promise<RAGResult> {
         console.log("Executing GraphRAG Strategy...");
 
-        // Get sessionId from context if available
         const sessionId = context?.sessionId;
-
-        // Get file data for this session
         const fileQuery = sessionId ? { sessionId } : {};
         const files = await FileMetadata.find(fileQuery).sort({ createdAt: -1 }).limit(10);
 
@@ -17,71 +15,84 @@ export class GraphRAGStrategy implements IRAGStrategy {
             return {
                 answer: "No data uploaded yet. Please upload files to analyze relations.",
                 sourceNodes: [],
-                reasoningTrace: "GraphRAG: No files found in session",
+                reasoningTrace: "GraphRAG: No files found",
             };
         }
 
-        // Build data summary
-        const dataInfo = files.map(f => ({
-            name: f.originalName,
-            type: f.fileType,
-            columns: f.extractedEntities?.filter(e => e.startsWith("Column:")).map(e => e.replace("Column:", "").trim()) || [],
-            values: f.extractedEntities?.filter(e => !e.startsWith("Column:") && !e.startsWith("Field:")).slice(0, 20) || [],
-            summary: f.contentSummary || "",
-            sample: f.sampleData ? JSON.parse(f.sampleData).slice(0, 3) : []
-        }));
+        // Get actual data from files
+        const dataInfo = files.map(f => {
+            const columns = f.extractedEntities?.filter(e => e.startsWith("Column:")).map(e => e.replace("Column:", "").trim()) || [];
+            const values = f.extractedEntities?.filter(e => !e.startsWith("Column:") && !e.startsWith("Field:")) || [];
+            let sample: any[] = [];
+            try {
+                sample = f.sampleData ? JSON.parse(f.sampleData).slice(0, 5) : [];
+            } catch { }
+            return { name: f.originalName, columns, values, sample, summary: f.contentSummary || "" };
+        });
 
-        // CONCISE system prompt - enforces direct answers
-        const systemPrompt = `You are a DATA ANALYST. Be DIRECT and CONCISE.
+        // Build relations from actual data
+        const relations: string[] = [];
+        dataInfo.forEach(file => {
+            file.columns.forEach(col => {
+                const colValues = file.sample.map((row: any) => row[col]).filter((v: any) => v);
+                const uniqueVals = [...new Set(colValues)].slice(0, 5);
+                if (uniqueVals.length > 0 && uniqueVals.length <= 10) {
+                    uniqueVals.forEach(val => relations.push(`${col} → contains → ${val}`));
+                }
+            });
+        });
 
-RULES:
-- Answer in 3-5 sentences MAX
-- DO NOT explain methods or theory
-- DO NOT give generic advice
-- ONLY describe what's in the ACTUAL DATA provided
-- If asked about relations, list them as: "A → relates to → B"
+        // VERY STRICT concise prompt
+        const systemPrompt = `You analyze data. Be EXTREMELY BRIEF.
 
-Available data: ${JSON.stringify(dataInfo, null, 2)}`;
+DATA IN YOUR SESSION:
+- File: ${dataInfo[0]?.name || "unknown"}
+- Columns: ${dataInfo[0]?.columns.join(", ") || "none"}
+- Sample values: ${JSON.stringify(dataInfo[0]?.sample.slice(0, 2)) || "none"}
+
+RULES - FOLLOW EXACTLY:
+1. MAX 4 short sentences
+2. List actual relations found in THIS data only
+3. Format: "column → relates to → value"  
+4. NO explanations, NO definitions, NO tutorials
+5. If no data, say "No data found"`;
 
         const answer = await GeminiService.generateFast(
-            query,
+            `Query: ${query}\n\nGive ONLY the relations from MY uploaded data. Be brief.`,
             systemPrompt
         );
 
-        // Extract and store relations
-        try {
-            const relationData = await GeminiService.analyzeComplex(
-                `From this data, extract entity relationships:
-${JSON.stringify(dataInfo)}
+        // Store graph data for session
+        if (sessionId && relations.length > 0) {
+            try {
+                const sessionObjectId = new mongoose.Types.ObjectId(sessionId);
+                const entities = dataInfo.flatMap(f => [
+                    ...f.columns.map(c => ({ name: c, type: "column" })),
+                    ...f.values.slice(0, 10).map(v => ({ name: v, type: "value" }))
+                ]);
+                const relationships = dataInfo[0]?.columns.flatMap(col => {
+                    const vals = dataInfo[0]?.sample.map((r: any) => r[col]).filter(Boolean);
+                    const unique = [...new Set(vals)].slice(0, 5);
+                    return unique.map(v => ({ from: col, to: String(v), type: "has_value" }));
+                }) || [];
 
-Return JSON only:
-{"entities": [{"name": "...", "type": "column|value|category"}], "relationships": [{"from": "...", "to": "...", "type": "has_value|belongs_to|relates_to"}]}`,
-                "You are a knowledge graph extractor. Return ONLY valid JSON, nothing else."
-            );
-
-            if (relationData && (relationData.entities || relationData.relationships)) {
-                // Store per session
-                if (sessionId) {
-                    const existingCache = await GraphCache.findOne({ sessionId });
-                    if (existingCache) {
-                        // Merge without duplicates
-                        const existingEntityNames = new Set(existingCache.entities?.map(e => e.name) || []);
-                        const newEntities = (relationData.entities || []).filter((e: any) => !existingEntityNames.has(e.name));
-                        existingCache.entities = [...(existingCache.entities || []), ...newEntities];
-                        existingCache.relationships = [...(existingCache.relationships || []), ...(relationData.relationships || [])];
-                        await existingCache.save();
-                    } else {
-                        await GraphCache.create({
-                            sessionId,
-                            entities: relationData.entities || [],
-                            relationships: relationData.relationships || []
-                        });
-                    }
-                    console.log("Stored graph cache for session:", sessionId);
+                const existing = await GraphCache.findOne({ sessionId: sessionObjectId });
+                if (existing) {
+                    const existingNames = new Set(existing.entities?.map(e => e.name) || []);
+                    existing.entities = [...(existing.entities || []), ...entities.filter(e => !existingNames.has(e.name))];
+                    existing.relationships = [...(existing.relationships || []), ...relationships];
+                    await existing.save();
+                } else {
+                    await GraphCache.create({
+                        sessionId: sessionObjectId,
+                        entities,
+                        relationships
+                    });
                 }
+                console.log(`Stored ${entities.length} entities, ${relationships.length} relations`);
+            } catch (e) {
+                console.warn("Graph storage error:", e);
             }
-        } catch (e) {
-            console.warn("Failed to extract relations:", e);
         }
 
         return {
@@ -91,7 +102,7 @@ Return JSON only:
                 content: f.originalName,
                 type: "File"
             })),
-            reasoningTrace: `GraphRAG: Analyzed ${files.length} file(s) → Found relations → Generated response`,
+            reasoningTrace: `GraphRAG: Found ${relations.length} relations in ${files.length} file(s)`,
         };
     }
 }

@@ -31,18 +31,18 @@ const safetySettings = [
     },
 ];
 
-// Model Definitions - Using stable models from official docs
-// https://ai.google.dev/gemini-api/docs/models
+// Model Definitions - Using experimental pro model for testing
+// Note: Using gemini-2.5-pro-exp-03-25 for better reasoning
 
 // Primary model for reasoning and routing
 const modelPrimary = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",  // Stable version
+    model: "gemini-2.5-pro-exp-03-25",  // Experimental pro model
     safetySettings
 });
 
 // Fast model for summarization and quick tasks
 const modelFast = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",  // Same model, very fast
+    model: "gemini-2.5-flash",  // Keep flash for speed
     safetySettings
 });
 
