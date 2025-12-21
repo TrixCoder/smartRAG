@@ -113,13 +113,13 @@ export default function SessionSidebar({ currentSessionId, onSessionSelect, onNe
                 ) : (
                     <AnimatePresence>
                         {sessions.map((session) => (
-                            <motion.button
+                            <motion.div
                                 key={session.id}
                                 initial={{ opacity: 0, x: -20 }}
                                 animate={{ opacity: 1, x: 0 }}
                                 exit={{ opacity: 0, x: -20 }}
                                 onClick={() => onSessionSelect(session.id)}
-                                className={`w-full text-left p-3 rounded-lg transition-colors group flex items-start gap-3 ${session.id === currentSessionId
+                                className={`w-full text-left p-3 rounded-lg transition-colors group flex items-start gap-3 cursor-pointer ${session.id === currentSessionId
                                     ? "bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300"
                                     : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
                                     }`}
@@ -139,7 +139,7 @@ export default function SessionSidebar({ currentSessionId, onSessionSelect, onNe
                                 >
                                     <Trash2 className="w-3.5 h-3.5 text-red-500" />
                                 </button>
-                            </motion.button>
+                            </motion.div>
                         ))}
                     </AnimatePresence>
                 )}
