@@ -85,7 +85,7 @@ export default function KnowledgeGraphModal({ isOpen, onClose }: KnowledgeGraphM
         }
     };
 
-    const getNodeColor = (node: Node) => {
+    const getNodeColor = (node: any) => {
         if (node.type === "file") {
             switch (node.fileType) {
                 case "pdf": return "#ef4444";
@@ -95,7 +95,10 @@ export default function KnowledgeGraphModal({ isOpen, onClose }: KnowledgeGraphM
                 default: return "#6b7280";
             }
         }
-        return "#3b82f6"; // Entity color
+        // Entity nodes - color by category
+        if (node.category === "column") return "#14b8a6"; // Teal for columns
+        if (node.category === "value") return "#3b82f6"; // Blue for values
+        return "#6366f1"; // Indigo for other entities
     };
 
     if (!isOpen) return null;
@@ -190,10 +193,7 @@ export default function KnowledgeGraphModal({ isOpen, onClose }: KnowledgeGraphM
 
                         {/* Legend */}
                         <div className="absolute bottom-4 left-4 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-sm rounded-lg p-3 text-xs space-y-1">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full bg-red-500" />
-                                <span>PDF Files</span>
-                            </div>
+                            <div className="font-medium mb-2 text-gray-700 dark:text-gray-300">Legend</div>
                             <div className="flex items-center gap-2">
                                 <div className="w-3 h-3 rounded-full bg-green-500" />
                                 <span>CSV Files</span>
@@ -203,8 +203,16 @@ export default function KnowledgeGraphModal({ isOpen, onClose }: KnowledgeGraphM
                                 <span>JSON Files</span>
                             </div>
                             <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-red-500" />
+                                <span>PDF Files</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-teal-500" />
+                                <span>Columns</span>
+                            </div>
+                            <div className="flex items-center gap-2">
                                 <div className="w-3 h-3 rounded-full bg-blue-500" />
-                                <span>Entities</span>
+                                <span>Values</span>
                             </div>
                         </div>
                     </div>

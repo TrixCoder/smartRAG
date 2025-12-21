@@ -119,6 +119,12 @@ async function startServer() {
                 return res.status(400).json({ error: "No files uploaded" });
             }
 
+            // Get sessionId from request body (sent as form field)
+            const sessionId = req.body.sessionId;
+            if (!sessionId) {
+                return res.status(400).json({ error: "sessionId is required" });
+            }
+
             const uploadedFiles = [];
 
             for (const file of files) {
@@ -198,8 +204,9 @@ async function startServer() {
                     sampleData = content.substring(0, 5000);
                 }
 
-                // Save to MongoDB
+                // Save to MongoDB with sessionId
                 const fileDoc = await FileMetadata.create({
+                    sessionId,
                     originalName: file.originalname,
                     mimeType: file.mimetype,
                     size: file.size,
@@ -272,91 +279,137 @@ async function startServer() {
         }
     });
 
-    // Get visualization data - combines MongoDB and Neo4j data
-    app.get("/visualization", async (_req: Request, res: Response) => {
+    // Get visualization data - filtered by session
+    app.get("/visualization", async (req: Request, res: Response) => {
         try {
-            const files = await FileMetadata.find().sort({ createdAt: -1 });
-            const graphCache = await GraphCache.findOne().sort({ createdAt: -1 });
+            const sessionId = req.query.sessionId as string;
 
-            const nodes: any[] = [];
+            // Filter by session if provided
+            const fileQuery = sessionId ? { sessionId } : {};
+            const files = await FileMetadata.find(fileQuery).sort({ createdAt: -1 });
+            const graphCache = sessionId
+                ? await GraphCache.findOne({ sessionId }).sort({ createdAt: -1 })
+                : await GraphCache.findOne().sort({ createdAt: -1 });
+
+            const nodesMap = new Map<string, any>();
             const links: any[] = [];
-            const nodeIds = new Set<string>();
+            const linkSet = new Set<string>(); // Prevent duplicate links
 
-            // Add file nodes from MongoDB
+            // Helper to normalize entity ID
+            const normalizeId = (name: string) => `entity-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`;
+
+            // Helper to add link without duplicates
+            const addLink = (source: string, target: string, label: string) => {
+                const key = `${source}->${target}`;
+                if (!linkSet.has(key) && source !== target) {
+                    links.push({ source, target, label });
+                    linkSet.add(key);
+                }
+            };
+
+            // Process each file
             files.forEach((file) => {
                 const fileId = `file-${file._id}`;
-                if (!nodeIds.has(fileId)) {
-                    nodes.push({
-                        id: fileId,
-                        name: file.originalName,
-                        type: "file",
-                        fileType: file.fileType,
-                        val: 12,
-                    });
-                    nodeIds.add(fileId);
 
-                    // Add entity nodes
-                    file.extractedEntities?.forEach((entity) => {
-                        const entityId = `entity-${entity.toLowerCase().replace(/\s+/g, "-")}`;
+                // Add file node
+                nodesMap.set(fileId, {
+                    id: fileId,
+                    name: file.originalName,
+                    type: "file",
+                    fileType: file.fileType,
+                    val: 15,
+                });
 
-                        if (!nodeIds.has(entityId)) {
-                            nodes.push({
-                                id: entityId,
-                                name: entity,
-                                type: entity.startsWith("Column:") ? "column" : "entity",
-                                val: 6,
-                            });
-                            nodeIds.add(entityId);
-                        }
+                // Separate columns and values
+                const columns: string[] = [];
+                const values: string[] = [];
 
-                        links.push({
-                            source: fileId,
-                            target: entityId,
-                            label: "contains",
+                file.extractedEntities?.forEach((entity) => {
+                    if (entity.startsWith("Column:")) {
+                        columns.push(entity.replace("Column:", "").trim());
+                    } else if (entity.startsWith("Field:")) {
+                        columns.push(entity.replace("Field:", "").trim());
+                    } else {
+                        values.push(entity);
+                    }
+                });
+
+                // Add column nodes
+                columns.forEach((col) => {
+                    const colId = normalizeId(`col-${col}`);
+                    if (!nodesMap.has(colId)) {
+                        nodesMap.set(colId, {
+                            id: colId,
+                            name: col,
+                            type: "entity", // Normalized to entity for frontend
+                            category: "column",
+                            val: 8,
                         });
-                    });
-                }
+                    }
+                    addLink(fileId, colId, "has_column");
+                });
+
+                // Add value nodes and link to relevant columns
+                values.forEach((val) => {
+                    const valId = normalizeId(val);
+                    if (!nodesMap.has(valId)) {
+                        nodesMap.set(valId, {
+                            id: valId,
+                            name: val,
+                            type: "entity",
+                            category: "value",
+                            val: 6,
+                        });
+                    }
+
+                    // Link values to their file
+                    addLink(fileId, valId, "contains");
+
+                    // Infer relationships: values likely belong to category/brand columns
+                    const categoryCol = columns.find(c => c.toLowerCase() === "category");
+                    const brandCol = columns.find(c => c.toLowerCase() === "brand");
+
+                    if (categoryCol && ["Books", "Beauty", "Toys", "Electronics", "Clothing", "Home"].includes(val)) {
+                        addLink(normalizeId(`col-${categoryCol}`), valId, "has_value");
+                    }
+                    if (brandCol && val.startsWith("Brand")) {
+                        addLink(normalizeId(`col-${brandCol}`), valId, "has_value");
+                    }
+                });
             });
 
-            // Add Neo4j graph data if connected
-            if (Neo4jService.isConnected()) {
-                try {
-                    const neo4jGraph = await Neo4jService.getGraph();
-                    neo4jGraph.nodes.forEach(n => {
-                        if (!nodeIds.has(n.id)) {
-                            nodes.push({ ...n, val: 8 });
-                            nodeIds.add(n.id);
-                        }
-                    });
-                    links.push(...neo4jGraph.links);
-                } catch (e) {
-                    console.warn("Neo4j graph fetch failed:", e);
-                }
-            }
-
-            // Add cached relationships
+            // Add relationships from GraphCache (AI-extracted)
             if (graphCache) {
+                graphCache.entities?.forEach((entity) => {
+                    const entityId = normalizeId(entity.name);
+                    if (!nodesMap.has(entityId)) {
+                        nodesMap.set(entityId, {
+                            id: entityId,
+                            name: entity.name,
+                            type: "entity",
+                            category: entity.type || "entity",
+                            val: 6,
+                        });
+                    }
+                });
+
                 graphCache.relationships?.forEach((rel) => {
-                    const fromId = `entity-${rel.from.toLowerCase().replace(/\s+/g, "-")}`;
-                    const toId = `entity-${rel.to.toLowerCase().replace(/\s+/g, "-")}`;
+                    const fromId = normalizeId(rel.from);
+                    const toId = normalizeId(rel.to);
 
-                    if (!nodeIds.has(fromId)) {
-                        nodes.push({ id: fromId, name: rel.from, type: "entity", val: 6 });
-                        nodeIds.add(fromId);
+                    // Ensure nodes exist
+                    if (!nodesMap.has(fromId)) {
+                        nodesMap.set(fromId, { id: fromId, name: rel.from, type: "entity", val: 6 });
                     }
-                    if (!nodeIds.has(toId)) {
-                        nodes.push({ id: toId, name: rel.to, type: "entity", val: 6 });
-                        nodeIds.add(toId);
+                    if (!nodesMap.has(toId)) {
+                        nodesMap.set(toId, { id: toId, name: rel.to, type: "entity", val: 6 });
                     }
 
-                    links.push({
-                        source: fromId,
-                        target: toId,
-                        label: rel.type,
-                    });
+                    addLink(fromId, toId, rel.type);
                 });
             }
 
+            const nodes = Array.from(nodesMap.values());
             res.json({ nodes, links });
         } catch (error) {
             console.error("Visualization error:", error);

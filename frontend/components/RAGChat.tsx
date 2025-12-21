@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useCallback, useRef } from "react";
-import { useMutation } from "@apollo/client/react";
-import { QUERY_RAG } from "@/lib/graphql";
+import React, { useState, useCallback, useRef, useEffect } from "react";
+import { useMutation, useQuery } from "@apollo/client/react";
+import { QUERY_RAG, GET_SESSION } from "@/lib/graphql";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,7 +44,27 @@ interface UploadedFile {
     extractedEntities: string[];
 }
 
-export default function RAGChat() {
+interface RAGChatProps {
+    sessionId: string | null;
+}
+
+interface SessionMessage {
+    id: string;
+    role: string;
+    content: string;
+    strategy: string;
+    reasoningTrace: string;
+    createdAt: string;
+}
+
+interface GetSessionData {
+    getSession: {
+        session: { id: string; title: string };
+        messages: SessionMessage[];
+    } | null;
+}
+
+export default function RAGChat({ sessionId }: RAGChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState("");
     const [queryRAG, { loading }] = useMutation<{ queryRAG: any }>(QUERY_RAG);
@@ -55,6 +75,30 @@ export default function RAGChat() {
     const [showGraph, setShowGraph] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // Fetch session messages when sessionId changes
+    const { data: sessionData, loading: loadingSession } = useQuery<GetSessionData>(GET_SESSION, {
+        variables: { sessionId },
+        skip: !sessionId,
+        fetchPolicy: "network-only",
+    });
+
+    // Load messages when session changes
+    useEffect(() => {
+        if (sessionData?.getSession?.messages) {
+            const loadedMessages: ChatMessage[] = sessionData.getSession.messages.map((msg) => ({
+                role: msg.role as "user" | "assistant",
+                content: msg.content,
+                strategy: msg.strategy,
+                trace: msg.reasoningTrace ? msg.reasoningTrace.split("\n") : [],
+                isNew: false,
+            }));
+            setMessages(loadedMessages);
+        } else {
+            setMessages([]);
+        }
+        setUploadedFiles([]);
+    }, [sessionId, sessionData]);
+
     const steps = [
         "Analyzing",
         "Routing",
@@ -63,7 +107,7 @@ export default function RAGChat() {
     ];
 
     const handleSend = async () => {
-        if (!input.trim()) return;
+        if (!input.trim() || !sessionId) return;
 
         const userMsg: ChatMessage = { role: "user", content: input };
         setMessages((prev) => [...prev, userMsg]);
@@ -77,6 +121,7 @@ export default function RAGChat() {
         try {
             const { data } = await queryRAG({
                 variables: {
+                    sessionId,
                     userInput: userMsg.content,
                     complexity: uploadedFiles.some(f => f.hasRelationalData) ? "high" : "low"
                 }
@@ -107,11 +152,12 @@ export default function RAGChat() {
     };
 
     const handleFileUpload = async (files: FileList | null) => {
-        if (!files || files.length === 0) return;
+        if (!files || files.length === 0 || !sessionId) return;
 
         setIsUploading(true);
         const formData = new FormData();
 
+        formData.append("sessionId", sessionId);
         Array.from(files).forEach(file => {
             formData.append("files", file);
         });
