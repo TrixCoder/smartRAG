@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,11 +19,14 @@ interface Node {
     type: "file" | "entity";
     fileType?: string;
     val: number;
+    x?: number;
+    y?: number;
+    category?: string;
 }
 
 interface Link {
-    source: string;
-    target: string;
+    source: string | Node;
+    target: string | Node;
 }
 
 interface GraphData {
@@ -40,7 +44,12 @@ export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: Know
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [mounted, setMounted] = useState(false);
     const graphRef = useRef<any>(null);
+
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     useEffect(() => {
         if (isOpen && sessionId) {
@@ -87,7 +96,7 @@ export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: Know
         }
     };
 
-    const getNodeColor = (node: any) => {
+    const getNodeColor = (node: Node) => {
         if (node.type === "file") {
             switch (node.fileType) {
                 case "pdf": return "#ef4444";
@@ -103,9 +112,9 @@ export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: Know
         return "#6366f1"; // Indigo for other entities
     };
 
-    if (!isOpen) return null;
+    if (!isOpen || !mounted) return null;
 
-    return (
+    return createPortal(
         <AnimatePresence>
             <motion.div
                 initial={{ opacity: 0 }}
@@ -220,6 +229,7 @@ export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: Know
                     </div>
                 </motion.div>
             </motion.div>
-        </AnimatePresence>
+        </AnimatePresence>,
+        document.body
     );
 }
