@@ -38,7 +38,7 @@ RULES:
             sourceNodes: files.map(f => ({
                 id: f._id.toString(),
                 content: f.originalName,
-                type: "File"
+                nodeType: "File"
             })),
             reasoningTrace: `Agentic: ${plan.join(" → ")}`,
             executionPlan: plan,

@@ -387,7 +387,7 @@ async function startServer() {
                             id: entityId,
                             name: entity.name,
                             type: "entity",
-                            category: entity.type || "entity",
+                            category: entity.entityType || "entity",
                             val: 6,
                         });
                     }
@@ -405,7 +405,7 @@ async function startServer() {
                         nodesMap.set(toId, { id: toId, name: rel.to, type: "entity", val: 6 });
                     }
 
-                    addLink(fromId, toId, rel.type);
+                    addLink(fromId, toId, rel.relationType);
                 });
             }
 

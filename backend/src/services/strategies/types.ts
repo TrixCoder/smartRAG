@@ -1,6 +1,6 @@
 export interface RAGResult {
     answer: string;
-    sourceNodes: Array<{ id: string; content: string; type: string; score?: number }>;
+    sourceNodes: Array<{ id: string; content: string; nodeType: string; score?: number }>;
     reasoningTrace: string;
     executionPlan?: string[];
 }

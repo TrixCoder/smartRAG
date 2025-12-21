@@ -26,7 +26,7 @@ export interface IChatMessage extends Document {
     sourceNodes?: Array<{
         id: string;
         content: string;
-        type: string;
+        nodeType: string;
         score?: number;
     }>;
     createdAt: Date;
@@ -42,7 +42,7 @@ const ChatMessageSchema = new Schema<IChatMessage>({
     sourceNodes: [{
         id: String,
         content: String,
-        type: String,
+        nodeType: String,
         score: Number
     }]
 }, { timestamps: true });
@@ -127,8 +127,8 @@ export const VectorChunk = mongoose.model<IVectorChunk>("VectorChunk", VectorChu
 // Graph Cache Schema
 export interface IGraphCache extends Document {
     sessionId: mongoose.Types.ObjectId;
-    entities: Array<{ name: string; type: string; properties?: Record<string, any> }>;
-    relationships: Array<{ from: string; to: string; type: string; properties?: Record<string, any> }>;
+    entities: Array<{ name: string; entityType: string; properties?: Record<string, any> }>;
+    relationships: Array<{ from: string; to: string; relationType: string; properties?: Record<string, any> }>;
     cypherScript?: string;
     createdAt: Date;
 }
@@ -137,13 +137,13 @@ const GraphCacheSchema = new Schema<IGraphCache>({
     sessionId: { type: Schema.Types.ObjectId, ref: "ChatSession", required: true, index: true },
     entities: [{
         name: String,
-        type: String,
+        entityType: String,
         properties: Schema.Types.Mixed
     }],
     relationships: [{
         from: String,
         to: String,
-        type: String,
+        relationType: String,
         properties: Schema.Types.Mixed
     }],
     cypherScript: String

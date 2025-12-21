@@ -47,7 +47,7 @@ RULES:
             sourceNodes: files.map(f => ({
                 id: f._id.toString(),
                 content: f.originalName,
-                type: "Document"
+                nodeType: "Document"
             })),
             reasoningTrace: `VectorRAG: Analyzed ${files.length} file(s)`,
         };

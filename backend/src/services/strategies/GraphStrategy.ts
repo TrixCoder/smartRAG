@@ -67,13 +67,13 @@ RULES - FOLLOW EXACTLY:
             try {
                 const sessionObjectId = new mongoose.Types.ObjectId(sessionId);
                 const entities = dataInfo.flatMap(f => [
-                    ...f.columns.map(c => ({ name: c, type: "column" })),
-                    ...f.values.slice(0, 10).map(v => ({ name: v, type: "value" }))
+                    ...f.columns.map(c => ({ name: c, entityType: "column" })),
+                    ...f.values.slice(0, 10).map(v => ({ name: v, entityType: "value" }))
                 ]);
                 const relationships = dataInfo[0]?.columns.flatMap(col => {
                     const vals = dataInfo[0]?.sample.map((r: any) => r[col]).filter(Boolean);
                     const unique = [...new Set(vals)].slice(0, 5);
-                    return unique.map(v => ({ from: col, to: String(v), type: "has_value" }));
+                    return unique.map(v => ({ from: col, to: String(v), relationType: "has_value" }));
                 }) || [];
 
                 const existing = await GraphCache.findOne({ sessionId: sessionObjectId });
@@ -100,7 +100,7 @@ RULES - FOLLOW EXACTLY:
             sourceNodes: files.map(f => ({
                 id: f._id.toString(),
                 content: f.originalName,
-                type: "File"
+                nodeType: "File"
             })),
             reasoningTrace: `GraphRAG: Found ${relations.length} relations in ${files.length} file(s)`,
         };
