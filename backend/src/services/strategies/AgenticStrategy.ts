@@ -18,15 +18,16 @@ export class AgenticRAGStrategy implements IRAGStrategy {
             return { name: f.originalName, columns: f.extractedEntities?.slice(0, 10) || [], sample };
         });
 
-        // STRICT brief prompt
-        const systemPrompt = `Execute this task on the uploaded data. Be BRIEF.
+        // UPDATED PROMPT: Concise but Explanatory
+        const systemPrompt = `Execute this task on the uploaded data.
 
 DATA: ${JSON.stringify(dataContext[0] || {}, null, 2)}
 
 RULES:
-1. MAX 4 sentences
-2. Use ONLY the data provided
-3. NO generic advice or definitions`;
+1. Synthesize the findings.
+2. Be CONCISE but EXPLANATORY (Max 3 paragraphs).
+3. Explain your reasoning briefly.
+4. Focus on insights rather than just raw data.`;
 
         const answer = await GeminiService.generateFast(
             `Task: ${query}`,

@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useMutation, useQuery } from "@apollo/client/react";
-import { QUERY_RAG, GET_SESSION } from "@/lib/graphql";
+import { QUERY_RAG, GET_SESSION, GET_SESSIONS, GET_SESSION_FILES } from "@/lib/graphql";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,6 +44,16 @@ interface UploadedFile {
     extractedEntities: string[];
 }
 
+interface GetSessionFilesData {
+    getSessionFiles: {
+        id: string;
+        originalName: string;
+        fileType: string;
+        hasRelationalData: boolean;
+        extractedEntities: string[];
+    }[];
+}
+
 interface RAGChatProps {
     sessionId: string | null;
 }
@@ -67,16 +77,44 @@ interface GetSessionData {
 export default function RAGChat({ sessionId }: RAGChatProps) {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState("");
-    const [queryRAG, { loading }] = useMutation<{ queryRAG: any }>(QUERY_RAG);
+    const [queryRAG, { loading }] = useMutation<{ queryRAG: any }>(QUERY_RAG, {
+        refetchQueries: [
+            { query: GET_SESSIONS },
+            { query: GET_SESSION, variables: { sessionId } },
+            { query: GET_SESSION_FILES, variables: { sessionId } }
+        ]
+    });
     const [currentStep, setCurrentStep] = useState(0);
     const [isDragging, setIsDragging] = useState(false);
-    const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
     const [isUploading, setIsUploading] = useState(false);
     const [showGraph, setShowGraph] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
 
-    // Fetch session messages when sessionId changes
-    const { data: sessionData, loading: loadingSession } = useQuery<GetSessionData>(GET_SESSION, {
+    // Fetch session files
+    const { data: filesData } = useQuery<GetSessionFilesData>(GET_SESSION_FILES, {
+        variables: { sessionId },
+        skip: !sessionId,
+        fetchPolicy: "cache-and-network"
+    });
+
+    // Sync files when data loads
+    useEffect(() => {
+        if (filesData?.getSessionFiles) {
+            setUploadedFiles(filesData.getSessionFiles.map(f => ({
+                id: f.id,
+                filename: f.originalName,
+                type: f.fileType,
+                hasRelationalData: f.hasRelationalData,
+                extractedEntities: f.extractedEntities
+            })));
+        } else if (!sessionId) {
+            setUploadedFiles([]);
+        }
+    }, [filesData, sessionId]);
+
+    // Fetch session messages
+    const { data: sessionData } = useQuery<GetSessionData>(GET_SESSION, {
         variables: { sessionId },
         skip: !sessionId,
         fetchPolicy: "network-only",
@@ -96,7 +134,6 @@ export default function RAGChat({ sessionId }: RAGChatProps) {
         } else {
             setMessages([]);
         }
-        setUploadedFiles([]);
     }, [sessionId, sessionData]);
 
     const steps = [
@@ -211,7 +248,7 @@ export default function RAGChat({ sessionId }: RAGChatProps) {
         <>
             <Card
                 className={cn(
-                    "w-full h-full flex flex-col bg-white/70 dark:bg-zinc-900/70 backdrop-blur-xl border border-zinc-200 dark:border-zinc-800 shadow-xl rounded-2xl overflow-hidden",
+                    "w-full h-full flex flex-col bg-white/80 dark:bg-zinc-950/50 backdrop-blur-xl border border-white/20 dark:border-zinc-800/50 shadow-2xl rounded-3xl overflow-hidden",
                     isDragging && "ring-2 ring-teal-500 ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950"
                 )}
                 onDragOver={handleDragOver}
@@ -313,10 +350,10 @@ export default function RAGChat({ sessionId }: RAGChatProps) {
                             )}
                         >
                             <div className={cn(
-                                "px-4 py-2.5 rounded-2xl text-sm leading-relaxed",
+                                "px-5 py-3.5 rounded-2xl text-sm leading-relaxed shadow-sm max-w-full",
                                 msg.role === "user"
-                                    ? "bg-teal-600 text-white rounded-br-md"
-                                    : "bg-zinc-100 dark:bg-zinc-800 rounded-bl-md max-w-full"
+                                    ? "bg-gradient-to-br from-teal-600 to-teal-700 text-white rounded-br-sm shadow-teal-900/20"
+                                    : "bg-white dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800 rounded-bl-sm text-zinc-700 dark:text-zinc-200"
                             )}>
                                 {msg.role === "user" ? (
                                     msg.content
@@ -384,8 +421,8 @@ export default function RAGChat({ sessionId }: RAGChatProps) {
                     )}
                 </ScrollArea>
 
-                {/* Input */}
-                <div className="p-3 bg-white/50 dark:bg-zinc-900/50 border-t border-zinc-100 dark:border-zinc-800/50 flex gap-2 items-center">
+                {/* Input Area */}
+                <div className="p-4 bg-white/50 dark:bg-zinc-900/50 backdrop-blur-sm border-t border-zinc-100 dark:border-zinc-800/50 flex gap-2 items-center">
                     <input
                         type="file"
                         ref={fileInputRef}
@@ -429,6 +466,7 @@ export default function RAGChat({ sessionId }: RAGChatProps) {
             <KnowledgeGraphModal
                 isOpen={showGraph}
                 onClose={() => setShowGraph(false)}
+                sessionId={sessionId}
             />
         </>
     );

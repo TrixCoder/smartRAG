@@ -2,6 +2,14 @@
 
 An intelligent Retrieval-Augmented Generation system that automatically selects the best strategy for your data.
 
+## 📸 Product Demo
+
+![Smart Conversation](images/demo1.png)
+*Intelligent Multi-Strategy Chat*
+
+![Knowledge Graph](images/demo2.png)
+*Interactive Knowledge Graph*
+
 ## ✨ Features
 
 - **Intelligent RAG Routing** - Automatically selects GraphRAG, Vector, or Agentic strategy based on your query

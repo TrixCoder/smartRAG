@@ -33,25 +33,27 @@ interface GraphData {
 interface KnowledgeGraphModalProps {
     isOpen: boolean;
     onClose: () => void;
+    sessionId: string | null;
 }
 
-export default function KnowledgeGraphModal({ isOpen, onClose }: KnowledgeGraphModalProps) {
+export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: KnowledgeGraphModalProps) {
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const graphRef = useRef<any>(null);
 
     useEffect(() => {
-        if (isOpen) {
+        if (isOpen && sessionId) {
             fetchGraphData();
         }
-    }, [isOpen]);
+    }, [isOpen, sessionId]);
 
     const fetchGraphData = async () => {
+        if (!sessionId) return;
         setLoading(true);
         setError(null);
         try {
-            const response = await fetch("http://localhost:4000/visualization");
+            const response = await fetch(`http://localhost:4000/visualization?sessionId=${sessionId}`);
             const data = await response.json();
 
             if (data.nodes && data.links) {

@@ -34,6 +34,19 @@ export const GET_SESSION = gql`
   }
 `;
 
+export const GET_SESSION_FILES = gql`
+  query GetSessionFiles($sessionId: ID!) {
+    getSessionFiles(sessionId: $sessionId) {
+      id
+      originalName
+      fileType
+      hasRelationalData
+      extractedEntities
+      createdAt
+    }
+  }
+`;
+
 export const CREATE_SESSION = gql`
   mutation CreateSession($title: String) {
     createSession(title: $title) {

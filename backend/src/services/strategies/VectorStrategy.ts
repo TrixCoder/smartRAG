@@ -25,17 +25,18 @@ export class VectorRAGStrategy implements IRAGStrategy {
             return { name: f.originalName, summary: f.contentSummary || "", sample };
         });
 
-        // STRICT brief prompt
-        const systemPrompt = `You analyze uploaded data. Be EXTREMELY BRIEF.
+        // UPDATED PROMPT: Concise but Explanatory
+        const systemPrompt = `You are a helpful Data Analyst.
 
 DATA:
 ${JSON.stringify(dataContext[0], null, 2)}
 
 RULES:
-1. MAX 4 sentences total
-2. Answer based ONLY on the data shown above
-3. NO tutorials, NO definitions, NO generic explanations
-4. If data doesn't answer the question, say "Not found in your data"`;
+1. Answer the query based on the data.
+2. Be CONCISE but EXPLANATORY (Max 3 paragraphs).
+3. Connect the dots and explain "why" if possible.
+4. Do not just list facts; provide synthesis.
+5. If not found, say "I couldn't find that information in the documents."`;
 
         const answer = await GeminiService.generateFast(
             query,

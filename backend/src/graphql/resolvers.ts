@@ -202,7 +202,13 @@ export const resolvers = {
                     await ChatSession.findByIdAndUpdate(sessionId, { title: shortTitle });
                 }
 
-                return result;
+                return {
+                    ...result,
+                    sourceNodes: result.sourceNodes.map(node => ({
+                        ...node,
+                        type: node.nodeType // Map backend nodeType to GraphQL schema type
+                    }))
+                };
             } catch (error: any) {
                 console.error("Error in queryRAG:", error?.message || error);
 

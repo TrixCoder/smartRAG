@@ -28,18 +28,19 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #09090b;
+    /* Deep, rich dark mode */
+    --background: #050505;
     --foreground: #fafafa;
-    --card: #18181b;
+    --card: #09090b;
     --card-foreground: #fafafa;
     --primary: #14b8a6;
-    --primary-foreground: #09090b;
-    --secondary: #27272a;
+    --primary-foreground: #000000;
+    --secondary: #18181b;
     --secondary-foreground: #fafafa;
-    --muted: #27272a;
+    --muted: #18181b;
     --muted-foreground: #a1a1aa;
     --accent: #2dd4bf;
-    --accent-foreground: #09090b;
+    --accent-foreground: #000000;
     --border: #27272a;
     --ring: #14b8a6;
   }

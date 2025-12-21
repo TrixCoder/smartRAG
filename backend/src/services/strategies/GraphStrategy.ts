@@ -22,74 +22,111 @@ export class GraphRAGStrategy implements IRAGStrategy {
         // Get actual data from files
         const dataInfo = files.map(f => {
             const columns = f.extractedEntities?.filter(e => e.startsWith("Column:")).map(e => e.replace("Column:", "").trim()) || [];
-            const values = f.extractedEntities?.filter(e => !e.startsWith("Column:") && !e.startsWith("Field:")) || [];
             let sample: any[] = [];
             try {
-                sample = f.sampleData ? JSON.parse(f.sampleData).slice(0, 5) : [];
+                sample = f.sampleData ? JSON.parse(f.sampleData).slice(0, 10) : [];
             } catch { }
-            return { name: f.originalName, columns, values, sample, summary: f.contentSummary || "" };
+            return { name: f.originalName, columns, sample, summary: f.contentSummary || "" };
         });
 
-        // Build relations from actual data
+        // 1. Build rich semantic relations (Row-Based)
+        // Heuristic: Assume first column or 'id'/'name' column is the Subject, others are Attributes.
         const relations: string[] = [];
+        const graphRelationships: any[] = [];
+        const graphEntities: any[] = [];
+
         dataInfo.forEach(file => {
-            file.columns.forEach(col => {
-                const colValues = file.sample.map((row: any) => row[col]).filter((v: any) => v);
-                const uniqueVals = [...new Set(colValues)].slice(0, 5);
-                if (uniqueVals.length > 0 && uniqueVals.length <= 10) {
-                    uniqueVals.forEach(val => relations.push(`${col} → contains → ${val}`));
-                }
-            });
+            if (file.columns.length > 0 && file.sample.length > 0) {
+                // Identify Subject Column (prefer ID or Name)
+                const subjectCol = file.columns.find(c => c.toLowerCase().includes("id") || c.toLowerCase().includes("name") || c.toLowerCase().includes("title")) || file.columns[0];
+                const attributeCols = file.columns.filter(c => c !== subjectCol);
+
+                file.sample.forEach((row: any) => {
+                    const subjectVal = row[subjectCol];
+                    if (!subjectVal) return;
+
+                    // Add Subject Entity
+                    graphEntities.push({ name: String(subjectVal), entityType: subjectCol });
+
+                    attributeCols.forEach(attrCol => {
+                        const attrVal = row[attrCol];
+                        if (attrVal) {
+                            // Link Subject -> Attribute Value
+                            relations.push(`${subjectVal} → ${attrCol} → ${attrVal}`);
+
+                            // Add Attribute Entity
+                            graphEntities.push({ name: String(attrVal), entityType: attrCol });
+
+                            // Add Relationship
+                            graphRelationships.push({
+                                from: String(subjectVal),
+                                to: String(attrVal),
+                                relationType: attrCol // Use column name as relation type (e.g. "category", "price")
+                            });
+                        }
+                    });
+                });
+            }
+
+            // Fallback: If no sample data (e.g. PDF), use extracted entities linkage
+            if (file.sample.length === 0 && file.columns.length > 0) {
+                file.columns.forEach(col => {
+                    relations.push(`File ${file.name} → contains → ${col}`);
+                    graphRelationships.push({ from: file.name, to: col, relationType: "contains" });
+                    graphEntities.push({ name: col, entityType: "column" });
+                    graphEntities.push({ name: file.name, entityType: "file" });
+                });
+            }
         });
 
-        // VERY STRICT concise prompt
-        const systemPrompt = `You analyze data. Be EXTREMELY BRIEF.
+        // Remove duplicates
+        const uniqueRelations = [...new Set(relations)].slice(0, 50); // Limit context size
 
-DATA IN YOUR SESSION:
-- File: ${dataInfo[0]?.name || "unknown"}
-- Columns: ${dataInfo[0]?.columns.join(", ") || "none"}
-- Sample values: ${JSON.stringify(dataInfo[0]?.sample.slice(0, 2)) || "none"}
+        // UPDATED PROMPT: Concise but Explanatory
+        const systemPrompt = `You are a helpful Data Analyst looking at a Knowledge Graph.
 
-RULES - FOLLOW EXACTLY:
-1. MAX 4 short sentences
-2. List actual relations found in THIS data only
-3. Format: "column → relates to → value"  
-4. NO explanations, NO definitions, NO tutorials
-5. If no data, say "No data found"`;
+DATA CONTEXT:
+${uniqueRelations.join("\n")}
+
+RULES:
+1. Analyze the relations to answer the user's query.
+2. Be CONCISE but EXPLANATORY (Max 3 paragraphs).
+3. Do NOT just list data. Explain the *patterns* or *connections* you see.
+4. If checking for specific items (e.g. "BrandA"), verify if they exist in the provided relations.
+5. Use natural language. Format with bullet points if helpful.`;
 
         const answer = await GeminiService.generateFast(
-            `Query: ${query}\n\nGive ONLY the relations from MY uploaded data. Be brief.`,
+            `Query: ${query}\n\nAnalyze the data relations above.`,
             systemPrompt
         );
 
         // Store graph data for session
-        if (sessionId && relations.length > 0) {
+        if (sessionId && graphRelationships.length > 0) {
             try {
                 const sessionObjectId = new mongoose.Types.ObjectId(sessionId);
-                const entities = dataInfo.flatMap(f => [
-                    ...f.columns.map(c => ({ name: c, entityType: "column" })),
-                    ...f.values.slice(0, 10).map(v => ({ name: v, entityType: "value" }))
-                ]);
-                const relationships = dataInfo[0]?.columns.flatMap(col => {
-                    const vals = dataInfo[0]?.sample.map((r: any) => r[col]).filter(Boolean);
-                    const unique = [...new Set(vals)].slice(0, 5);
-                    return unique.map(v => ({ from: col, to: String(v), relationType: "has_value" }));
-                }) || [];
+
+                // Deduplicate entities and relationships before saving
+                const uniqueEntitiesMap = new Map();
+                graphEntities.forEach(e => uniqueEntitiesMap.set(e.name, e));
+                const uniqueEntities = Array.from(uniqueEntitiesMap.values()).slice(0, 100);
 
                 const existing = await GraphCache.findOne({ sessionId: sessionObjectId });
                 if (existing) {
                     const existingNames = new Set(existing.entities?.map(e => e.name) || []);
-                    existing.entities = [...(existing.entities || []), ...entities.filter(e => !existingNames.has(e.name))];
-                    existing.relationships = [...(existing.relationships || []), ...relationships];
+                    const newEntities = uniqueEntities.filter(e => !existingNames.has(e.name));
+
+                    existing.entities = [...(existing.entities || []), ...newEntities];
+                    // Append new relationships (limit total to avoid explosion)
+                    existing.relationships = [...(existing.relationships || []), ...graphRelationships].slice(-500);
                     await existing.save();
                 } else {
                     await GraphCache.create({
                         sessionId: sessionObjectId,
-                        entities,
-                        relationships
+                        entities: uniqueEntities,
+                        relationships: graphRelationships.slice(0, 500)
                     });
                 }
-                console.log(`Stored ${entities.length} entities, ${relationships.length} relations`);
+                console.log(`Stored ${uniqueEntities.length} entities and ${graphRelationships.length} relationships`);
             } catch (e) {
                 console.warn("Graph storage error:", e);
             }
@@ -102,7 +139,7 @@ RULES - FOLLOW EXACTLY:
                 content: f.originalName,
                 nodeType: "File"
             })),
-            reasoningTrace: `GraphRAG: Found ${relations.length} relations in ${files.length} file(s)`,
+            reasoningTrace: `GraphRAG: Analyzed ${uniqueRelations.length} relations from ${files.length} file(s).`,
         };
     }
 }
