@@ -111,14 +111,14 @@ export default function KnowledgeGraphModal({ isOpen, onClose, sessionId }: Know
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-2 md:p-4"
                 onClick={onClose}
             >
                 <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
+                    initial={{ scale: 0.95, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.9, opacity: 0 }}
-                    className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] overflow-hidden flex flex-col"
+                    exit={{ scale: 0.95, opacity: 0 }}
+                    className="bg-white dark:bg-zinc-900 md:rounded-2xl shadow-2xl w-full md:w-[95vw] max-w-5xl h-full md:h-[85vh] overflow-hidden flex flex-col rounded-xl"
                     onClick={(e) => e.stopPropagation()}
                 >
                     {/* Header */}
